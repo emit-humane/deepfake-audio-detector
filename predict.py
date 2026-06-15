@@ -16,8 +16,24 @@ import sys
 # Model load karo
 model = tf.keras.models.load_model('best_model.h5', compile=False)
 
+WIN = 16000 * 4  # the model expects 4 s at 16 kHz
+
+def _loudest_window(y):
+    """Pick the 4 s slice with the most energy so a silent lead-in or a long
+    recording isn't truncated to the (possibly quiet) first 4 s."""
+    if y.size <= WIN:
+        return y
+    csum = np.cumsum(np.concatenate(([0.0], y.astype(np.float64) ** 2)))
+    best_start, best_e = 0, -1.0
+    for start in range(0, y.size - WIN + 1, 1600):
+        e = csum[start + WIN] - csum[start]
+        if e > best_e:
+            best_e, best_start = e, start
+    return y[best_start:best_start + WIN]
+
 def predict_audio(file_path):
-    audio, sr = librosa.load(file_path, sr=16000, duration=4.0)
+    audio, sr = librosa.load(file_path, sr=16000)
+    audio = _loudest_window(audio)
     mfcc = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=40)
     if mfcc.shape[1] < 200:
         mfcc = np.pad(mfcc, ((0,0),(0, 200 - mfcc.shape[1])))

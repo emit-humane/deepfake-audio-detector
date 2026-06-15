@@ -79,11 +79,32 @@ SILENCE_RMS = 0.005
 
 ALLOWED_TYPES = ["wav", "mp3", "flac", "m4a", "ogg", "aac"]
 
+WIN = 16000 * 4  # the model expects 4 s at 16 kHz
+
+def _loudest_window(y):
+    """Return the 4-second slice with the most energy. A recording with a silent
+    lead-in (click mic, breathe, then speak) or one longer than 4 s would
+    otherwise be truncated to the first 4 s and read as silence."""
+    if y.size <= WIN:
+        return y
+    # O(n) sliding-window energy via a cumulative sum of squares
+    csum = np.cumsum(np.concatenate(([0.0], y.astype(np.float64) ** 2)))
+    hop = 1600  # 0.1 s steps
+    best_start, best_e = 0, -1.0
+    for start in range(0, y.size - WIN + 1, hop):
+        e = csum[start + WIN] - csum[start]
+        if e > best_e:
+            best_e, best_start = e, start
+    return y[best_start:best_start + WIN]
+
 def predict(file_path):
-    audio, sr = librosa.load(file_path, sr=16000, duration=4.0)
-    rms = float(np.sqrt(np.mean(audio**2))) if audio.size else 0.0
+    # Load the WHOLE clip (no 4 s cap), then score the loudest 4 s window — so a
+    # quiet lead-in or a long recording isn't silently truncated to nothing.
+    audio, sr = librosa.load(file_path, sr=16000)
     dur = (len(audio) / sr) if audio.size else 0.0
-    mfcc = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=40)
+    seg = _loudest_window(audio)
+    rms = float(np.sqrt(np.mean(seg ** 2))) if seg.size else 0.0
+    mfcc = librosa.feature.mfcc(y=seg, sr=sr, n_mfcc=40)
     if mfcc.shape[1] < 200:
         mfcc = np.pad(mfcc, ((0,0),(0, 200 - mfcc.shape[1])))
     else:
@@ -127,14 +148,24 @@ def analyze(uploaded):
         except OSError:
             pass
     # Always show what was actually decoded, so a silent capture is visible.
-    st.caption(f"Decoded clip: {dur:.1f}s · 16 kHz · signal level (RMS) = {rms:.4f}")
+    st.caption(f"Decoded clip: {dur:.1f}s · 16 kHz · loudest-window signal (RMS) = {rms:.4f}")
+    if rms == 0.0:
+        st.error(
+            "🔇 A completely silent track was recorded (all-zero samples) — the mic "
+            "audio never reached the browser. This is a device/OS issue, not your "
+            "speech, so there's nothing to analyze. Try, in order:\n\n"
+            "1. **Windows → Privacy & security → Microphone** — turn on mic access for "
+            "apps / desktop apps.\n"
+            "2. **Settings → System → Sound → Input** — select your real mic (not "
+            "'Stereo Mix' / a virtual device) and raise the level.\n"
+            "3. Click the **🎤 icon in the browser address bar** and pick the correct mic.\n"
+            "4. Use **Chrome or Edge** — Brave and iOS Safari can record silence."
+        )
+        return
     if rms < SILENCE_RMS:
         st.warning(
-            "⚠️ This clip decoded to almost no sound (see the very low signal level "
-            "above). If you were speaking, the audio isn't reaching the app — check "
-            "the browser's microphone permission and that the right input device is "
-            "selected. The result below is unreliable for near-silent audio "
-            "(the model tends to output FAKE)."
+            "⚠️ This clip is very quiet (low signal level above). Speak louder/closer to "
+            "the mic, or check your input device — the result below may be unreliable."
         )
     show_result(prob)
 
@@ -148,11 +179,13 @@ with tab1:
 
 with tab2:
     st.markdown("### Record directly from your microphone 🎙️")
-    st.caption("Click the mic, speak for a few seconds, then click it again to stop.")
+    st.caption("Click the mic, **speak right away**, then click it again to stop.")
     st.info(
-        "🔒 Microphone only works on a **secure origin**. Open this app at "
-        "**http://localhost:8501** — not the `http://192.168.x.x` network URL. "
-        "Browsers block mic access on plain-http LAN addresses, which records silence."
+        "🎤 Allow the microphone prompt when it appears. If the result comes back "
+        "silent, it's almost always the input device — check your OS mic settings and "
+        "the 🎤 icon in the address bar, and use Chrome/Edge. "
+        "(Running locally? Use **http://localhost**, not a `192.168.x.x` URL — browsers "
+        "block the mic on plain-http LAN addresses.)"
     )
     recorded = st.audio_input("Record audio")
     if recorded:
