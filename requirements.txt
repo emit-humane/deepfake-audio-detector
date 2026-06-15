@@ -1,0 +1,9 @@
+# tensorflow-cpu (not full tensorflow): cloud hosts have no GPU — smaller image, less RAM.
+tensorflow-cpu==2.19.0
+keras==3.12.2
+librosa==0.11.0
+soundfile==0.12.1
+audioread==3.0.1
+numpy==1.26.4
+scikit-learn
+streamlit==1.46.0
